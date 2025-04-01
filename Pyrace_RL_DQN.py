@@ -14,7 +14,7 @@ import torch.nn.functional as F
 import gymnasium as gym
 import gym_race
 """
-this imports race_env.py (a gym env) and pyrace_2d.py (the race game) and registers the env as "Pyrace-v1"
+This imports race_env.py (a gym env) and pyrace_2d.py (the race game) and registers the env as "Pyrace-v1"
 
 register(
     id='Pyrace-v1',
@@ -22,27 +22,34 @@ register(
     max_episode_steps=2_000,
 )
 """
+
 VERSION_NAME = 'DQN_v01'  # the name for our model
+MODEL_DIR = f'models_{VERSION_NAME}'  # Consistent model folder
 
 REPORT_EPISODES = 500  # report (plot) every...
 DISPLAY_EPISODES = 100  # display live game every...
 
-
-# Define the DQN neural network
+# Define the DQN neural network with enhanced capacity and dropout
 class DQN(nn.Module):
     def __init__(self, input_dim, output_dim):
         super(DQN, self).__init__()
-        self.fc1 = nn.Linear(input_dim, 128)
-        self.fc2 = nn.Linear(128, 128)
-        self.fc3 = nn.Linear(128, output_dim)
-        
+        self.fc1 = nn.Linear(input_dim, 256)  # Increased capacity
+        self.dropout1 = nn.Dropout(0.2)         # Added dropout to reduce overfitting
+        self.fc2 = nn.Linear(256, 256)          # Increased capacity
+        self.dropout2 = nn.Dropout(0.2)         # Added dropout
+        self.fc3 = nn.Linear(256, 128)          # Extra hidden layer for complexity
+        self.fc4 = nn.Linear(128, output_dim)   # Output layer
+       
     def forward(self, x):
         x = F.relu(self.fc1(x))
+        x = self.dropout1(x)
         x = F.relu(self.fc2(x))
-        return self.fc3(x)
+        x = self.dropout2(x)
+        x = F.relu(self.fc3(x))
+        return self.fc4(x)
 
 
-# The ReplayBuffer class will store experiences for training
+# The ReplayBuffer class to store experiences
 class ReplayBuffer:
     def __init__(self, capacity):
         self.buffer = deque(maxlen=capacity)
@@ -65,9 +72,11 @@ class ReplayBuffer:
         return len(self.buffer)
 
 
-# The DQNAgent class will handle training and action selection
+# The DQNAgent class handles training and action selection.
 class DQNAgent:
-    def __init__(self, state_dim, action_dim, learning_rate=0.001, gamma=0.99, epsilon=1.0, epsilon_min=0.01, epsilon_decay=0.995, buffer_size=10000, batch_size=64):
+    def __init__(self, state_dim, action_dim, learning_rate=0.001, gamma=0.99,
+                 epsilon=1.0, epsilon_min=0.01, epsilon_decay=0.995,
+                 buffer_size=10000, batch_size=64):
         self.state_dim = state_dim
         self.action_dim = action_dim
         self.gamma = gamma
@@ -86,7 +95,9 @@ class DQNAgent:
         self.memory = ReplayBuffer(buffer_size)
         
         self.steps_done = 0
-        self.update_target_every = 10  # Update target network every 10 steps
+        self.update_target_every = 10
+        self.episodes_done = 0  # Track episodes for epsilon decay
+        self.reward_scaling = 0.01  # Scale rewards to smaller range
     
     def select_action(self, state, explore=True):
         if explore and random.random() < self.epsilon:
@@ -98,7 +109,9 @@ class DQNAgent:
             return q_values.max(1)[1].item()
     
     def remember(self, state, action, reward, next_state, done):
-        self.memory.push(state, action, reward, next_state, done)
+        # Scale the reward before storing
+        scaled_reward = reward * self.reward_scaling
+        self.memory.push(state, action, scaled_reward, next_state, done)
     
     def replay(self):
         if len(self.memory) < self.batch_size:
@@ -109,10 +122,10 @@ class DQNAgent:
         # Compute Q(s_t, a)
         state_action_values = self.policy_net(state).gather(1, action.unsqueeze(1))
         
-        # Compute max Q(s_{t+1}, a) for all next states
+        # Compute max Q(s_{t+1}, a) for all next states from target network
         next_state_values = self.target_net(next_state).max(1)[0].detach()
         
-        # Compute the expected Q values
+        # Compute expected Q values using the Bellman equation
         expected_state_action_values = reward + (1 - done) * self.gamma * next_state_values
         
         # Compute Huber loss
@@ -122,15 +135,15 @@ class DQNAgent:
         self.optimizer.zero_grad()
         loss.backward()
         for param in self.policy_net.parameters():
-            param.grad.data.clamp_(-1, 1)  # Clip gradients
+            param.grad.data.clamp_(-1, 1)  # Gradient clipping
         self.optimizer.step()
         
-        # Update target network
+        # Update target network periodically
         self.steps_done += 1
         if self.steps_done % self.update_target_every == 0:
             self.target_net.load_state_dict(self.policy_net.state_dict())
         
-        # Decay epsilon
+        # Decay epsilon after each episode instead of each replay step
         self.epsilon = max(self.epsilon_min, self.epsilon * self.epsilon_decay)
     
     def save(self, file_path):
@@ -156,78 +169,95 @@ class DQNAgent:
             print(f"No model found at {file_path}")
 
 
-def simulate(agent, env, learning=True, episode_start=0, num_episodes=65000, max_t=2000):
-    env.set_view(True)
-    total_rewards = []
-    max_reward = -10_000
+def simulate(agent, env, learning=True, episode_start=0, num_episodes=10000, max_t=2000):
+    """
+    Simulate episodes of the environment with the agent.
+    """
+    env.set_view(True)  # Enable visualization
+    episode_rewards = []
+    episode_lengths = []
+    best_reward = float('-inf')
     
-    for episode in range(episode_start, num_episodes + episode_start):
-        if episode > 0:
-            total_rewards.append(total_reward)
-            
-            # Report and save model
-            if learning and episode % REPORT_EPISODES == 0:
-                plt.plot(total_rewards)
-                plt.ylabel('rewards')
-                plt.show(block=False)
-                plt.pause(4.0)
-                
-                # Save model
-                os.makedirs(f'models_{VERSION_NAME}', exist_ok=True)
-                model_file = f'models_{VERSION_NAME}/dqn_model_{episode}.pt'
-                agent.save(model_file)
-                plt.close()  # to avoid memory errors
-        
-        # Reset the environment
-        obv, _ = env.reset()
+    for episode in range(episode_start, episode_start + num_episodes):
+        state, _ = env.reset()
         total_reward = 0
-        if not learning:
-            env.pyrace.mode = 2  # continuous display of game
+        t = 0
         
-        for t in range(max_t):
-            # Select and perform an action
-            action = agent.select_action(obv, explore=learning)
-            next_obv, reward, done, _, info = env.step(action)
-            env.remember(obv, action, reward, next_obv, done)
+        # Always show the game during training
+        env.pyrace.mode = 2  # continuous display of game
+        
+        while t < max_t:
+            action = agent.select_action(state, explore=learning)
+            next_state, reward, terminated, truncated, info = env.step(action)
+            done = terminated or truncated
             
             if learning:
-                # Store the transition in memory
-                agent.remember(obv, action, reward, next_obv, done)
-                
-                # Perform one step of the optimization
+                agent.remember(state, action, reward, next_state, done)
                 agent.replay()
-                
-            # Move to the next state
-            obv = next_obv
+            
+            state = next_state
             total_reward += reward
+            t += 1
             
-            # Display the game
-            if (episode % DISPLAY_EPISODES == 0) or (env.pyrace.mode == 2):
-                env.set_msgs(['SIMULATE',
-                             f'Episode: {episode}',
-                             f'Time steps: {t}',
-                             f'check: {info["check"]}',
-                             f'dist: {info["dist"]}',
-                             f'crash: {info["crash"]}',
-                             f'Reward: {total_reward:.0f}',
-                             f'Max Reward: {max_reward:.0f}',
-                             f'Epsilon: {agent.epsilon:.4f}'])
-                env.render()
+            # Display game information
+            env.set_msgs([
+                f'Episode: {episode}',
+                f'Time steps: {t}',
+                f'Reward: {total_reward:.0f}',
+                f'Epsilon: {agent.epsilon:.4f}',
+                f'Best Reward: {best_reward:.0f}'
+            ])
+            env.render()  # Make sure to render each step
             
-            if done or t >= max_t - 1:
-                if total_reward > max_reward:
-                    max_reward = total_reward
+            if done:
                 break
+        
+        episode_rewards.append(total_reward)
+        episode_lengths.append(t)
+        
+        # Print progress every 10 episodes
+        if (episode + 1) % 10 == 0:
+            avg_reward = np.mean(episode_rewards[-10:])
+            avg_length = np.mean(episode_lengths[-10:])
+            print(f"Episode {episode + 1}/{num_episodes}")
+            print(f"Average Reward (last 10): {avg_reward:.2f}")
+            print(f"Average Length (last 10): {avg_length:.2f}")
+            print(f"Epsilon: {agent.epsilon:.4f}")
+            print("-" * 50)
+        
+        # Save best model
+        if total_reward > best_reward:
+            best_reward = total_reward
+            agent.save(f'models_DQN_v01/best_model_{VERSION_NAME}.pth')
+        
+        # Save checkpoint every 100 episodes
+        if (episode + 1) % 100 == 0:
+            agent.save(f'models_DQN_v01/checkpoint_{VERSION_NAME}_episode_{episode+1}.pth')
+    
+    return episode_rewards, episode_lengths
 
 
-def load_and_play(episode, learning=False):
-    # Load a saved model and play the game
-    agent = DQNAgent(state_dim=len(env.observation_space.low), action_dim=env.action_space.n)
-    model_file = f'models_{VERSION_NAME}/dqn_model_{episode}.pt'
+def load_and_play(episode=None, learning=False):
+    """
+    Load a saved model and play the game.
+    If episode is None, load the best model.
+    """
+    agent = DQNAgent(state_dim=len(env.observation_space.low), action_dim=4)
+    
+    # Use best model if no specific episode is provided
+    if episode is None:
+        model_file = os.path.join(MODEL_DIR, f'best_model_{VERSION_NAME}.pth')
+    else:
+        model_file = os.path.join(MODEL_DIR, f'checkpoint_{VERSION_NAME}_episode_{episode}.pth')
+    
     agent.load(model_file)
     
-    # Play the game
-    simulate(agent, env, learning=learning, episode_start=episode)
+    # Set network to evaluation mode when not learning
+    if not learning:
+        agent.policy_net.eval()
+    
+    # Play the game without further learning
+    simulate(agent, env, learning=learning, episode_start=0, num_episodes=10)
 
 
 if __name__ == "__main__":
@@ -236,28 +266,28 @@ if __name__ == "__main__":
     print('env', type(env))
     
     # Create directories for saving models
-    if not os.path.exists(f'models_{VERSION_NAME}'):
-        os.makedirs(f'models_{VERSION_NAME}')
+    if not os.path.exists(MODEL_DIR):
+        os.makedirs(MODEL_DIR)
     
     # Print environment information
     print("Observation space:", env.observation_space)
     print("Action space:", env.action_space)
     
-    # Hyperparameters
-    NUM_EPISODES = 65_000
+    # Hyperparameters - Adjusted for better learning
+    NUM_EPISODES = 65000  # Increased training duration
     MAX_T = 2000
-    GAMMA = 0.99            # discount factor
-    EPSILON_START = 1.0     # start with 100% exploration
-    EPSILON_MIN = 0.01      # minimum exploration rate
-    EPSILON_DECAY = 0.995   # decay rate for exploration
-    LEARNING_RATE = 0.001   # learning rate for optimizer
-    BUFFER_SIZE = 100000    # replay buffer size
-    BATCH_SIZE = 64         # minibatch size for training
+    GAMMA = 0.99            # Discount factor
+    EPSILON_START = 1.0     # Start with 100% exploration
+    EPSILON_MIN = 0.01      # Minimum exploration rate
+    EPSILON_DECAY = 0.999   # Slower decay rate for exploration
+    LEARNING_RATE = 0.0005  # Reduced learning rate for more stable learning
+    BUFFER_SIZE = 50000     # Increased buffer size for more diverse experiences
+    BATCH_SIZE = 128        # Increased batch size for better gradient estimates
     
-    # Initialize the DQN agent
+    # Initialize the DQN agent with 4 actions (accelerate, brake, turn left, turn right)
     agent = DQNAgent(
         state_dim=len(env.observation_space.low),
-        action_dim=env.action_space.n,
+        action_dim=4,  # Changed from env.action_space.n to 4
         learning_rate=LEARNING_RATE,
         gamma=GAMMA,
         epsilon=EPSILON_START,
@@ -267,13 +297,21 @@ if __name__ == "__main__":
         batch_size=BATCH_SIZE
     )
     
-    # Choose what to do:
+    # Train the agent
+    print("Starting training...")
+    print("You should see a window with the car simulation")
+    print("The car will start with random movements and gradually learn to drive")
+    print("Press Ctrl+C to stop training at any time")
     
-    # Train a new model
-    simulate(agent, env, learning=True, num_episodes=NUM_EPISODES, max_t=MAX_T)
+    try:
+        episode_rewards, episode_lengths = simulate(agent, env, learning=True, num_episodes=NUM_EPISODES, max_t=MAX_T)
+    except KeyboardInterrupt:
+        print("\nTraining interrupted by user")
+        print("Saving current model...")
+        agent.save(f'{MODEL_DIR}/interrupted_model_{VERSION_NAME}.pth')
     
-    # Alternatively, load and continue training a saved model
-    # load_and_play(3500, learning=True)
+    # Alternatively, load and continue training a saved model:
+    # load_and_play(episode=350, learning=True)
     
-    # Or just play with a saved model without learning
-    # load_and_play(3500, learning=False) 
+    # Or just play with a saved model without learning:
+    # load_and_play(episode=None, learning=False)
