@@ -199,14 +199,26 @@ class PyRace2D:
         self.screen = pygame.display.set_mode((screen_width, screen_height))
         self.clock = pygame.time.Clock()
         self.font = pygame.font.SysFont("Arial", 30)
+        self.game_speed = 60
+        self.is_render = is_render
+        self.bg = 0, 0, 0
+        self.done = False
+        self.mode = mode
+        
+        # Initialize map and car(s)
         self.map = pygame.image.load('race_track_ie.png')
         self.cars = []
         if car:
-            self.car = Car('car.png', self.map, [500, 650])
+            self.car = Car('car_green.png', self.map, [700, 650])
             self.cars.append(self.car)
-        self.game_speed = 60*0 # as fast as possible...
-        self.is_render = is_render
-        self.mode = mode # 0: normal, 1:dark, 2: normal (force display)
+            self.is_car_init = True
+        else:
+            self.is_car_init = False
+            
+        # Force display initialization
+        if self.is_render:
+            pygame.display.flip()
+            self.clock.tick(self.game_speed)
 
     def action(self, action):
         if action == 0: self.car.speed += 2
@@ -307,7 +319,9 @@ class PyRace2D:
         text_rect.topleft = (750,0)
         self.screen.blit(text, text_rect)
 
-        pygame.display.flip()
+        # Update the display
+        pygame.display.update()  # More efficient than flip for partial updates
+        pygame.event.pump()      # Process event queue to keep UI responsive
         self.clock.tick(self.game_speed)
 
 

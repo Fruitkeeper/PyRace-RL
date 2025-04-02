@@ -5,6 +5,7 @@ import matplotlib
 matplotlib.use('Agg')  # to avoid some "memory" errors with TkAgg backend
 import matplotlib.pyplot as plt
 from collections import deque
+import time  # Import time module for adding delays
 
 import torch
 import torch.nn as nn
@@ -25,8 +26,15 @@ register(
 VERSION_NAME = 'DQN_v01'  # the name for our model
 
 REPORT_EPISODES = 500  # report (plot) every...
-DISPLAY_EPISODES = 100  # display live game every...
+DISPLAY_EPISODES = 5   # display live game every... (reduced from 10 to 5)
 
+# Visual Settings
+DISPLAY_SLEEP = 0.1    # seconds to sleep between steps when displaying
+DISPLAY_MODE = True    # Set to False to disable display entirely for faster training
+
+# Training settings
+DEMO_MODE = False      # Set to True for a short demo run
+DEMO_EPISODES = 100    # Number of episodes to run in demo mode
 
 # Define the DQN neural network
 class DQN(nn.Module):
@@ -54,10 +62,10 @@ class ReplayBuffer:
         batch = random.sample(self.buffer, batch_size)
         state, action, reward, next_state, done = zip(*batch)
         return (
-            torch.FloatTensor(state),
+            torch.FloatTensor(np.array(state)),
             torch.LongTensor(action),
             torch.FloatTensor(reward),
-            torch.FloatTensor(next_state),
+            torch.FloatTensor(np.array(next_state)),
             torch.FloatTensor(done)
         )
     
@@ -157,32 +165,57 @@ class DQNAgent:
 
 
 def simulate(agent, env, learning=True, episode_start=0, num_episodes=65000, max_t=2000):
-    env.set_view(True)
+    env.set_view(DISPLAY_MODE)  # Set view mode based on global setting
     total_rewards = []
     max_reward = -10_000
     
+    # Create logs directory if it doesn't exist
+    logs_dir = f'logs_{VERSION_NAME}'
+    os.makedirs(logs_dir, exist_ok=True)
+    
+    # Adjust number of episodes for demo mode
+    if DEMO_MODE and learning:
+        num_episodes = min(num_episodes, DEMO_EPISODES)
+        print(f"DEMO MODE: Running {num_episodes} episodes")
+    
     for episode in range(episode_start, num_episodes + episode_start):
+        # Display training progress in console
+        if episode % 10 == 0:
+            print(f"Episode {episode}/{num_episodes + episode_start}, Epsilon: {agent.epsilon:.4f}")
+            
         if episode > 0:
             total_rewards.append(total_reward)
             
             # Report and save model
             if learning and episode % REPORT_EPISODES == 0:
+                plt.figure(figsize=(10, 6))
                 plt.plot(total_rewards)
                 plt.ylabel('rewards')
-                plt.show(block=False)
-                plt.pause(4.0)
+                plt.xlabel('episodes')
+                plt.title(f'DQN Training Rewards (Episode {episode})')
+                
+                # Save the plot instead of showing it
+                plot_file = f'{logs_dir}/rewards_episode_{episode}.png'
+                plt.savefig(plot_file)
+                print(f"Plot saved to {plot_file}")
+                plt.close()
                 
                 # Save model
                 os.makedirs(f'models_{VERSION_NAME}', exist_ok=True)
                 model_file = f'models_{VERSION_NAME}/dqn_model_{episode}.pt'
                 agent.save(model_file)
-                plt.close()  # to avoid memory errors
         
         # Reset the environment
         obv, _ = env.reset()
         total_reward = 0
-        if not learning:
+        
+        # Set display mode for this episode
+        should_display = (episode % DISPLAY_EPISODES == 0) and DISPLAY_MODE
+        if should_display:
             env.pyrace.mode = 2  # continuous display of game
+            print(f"Displaying episode {episode}")
+        elif not learning:
+            env.pyrace.mode = 2  # Always display when not learning
         
         for t in range(max_t):
             # Select and perform an action
@@ -202,7 +235,7 @@ def simulate(agent, env, learning=True, episode_start=0, num_episodes=65000, max
             total_reward += reward
             
             # Display the game
-            if (episode % DISPLAY_EPISODES == 0) or (env.pyrace.mode == 2):
+            if should_display or (env.pyrace.mode == 2):
                 env.set_msgs(['SIMULATE',
                              f'Episode: {episode}',
                              f'Time steps: {t}',
@@ -213,10 +246,17 @@ def simulate(agent, env, learning=True, episode_start=0, num_episodes=65000, max
                              f'Max Reward: {max_reward:.0f}',
                              f'Epsilon: {agent.epsilon:.4f}'])
                 env.render()
+                
+                # Add a sleep to slow down display and make it more visible
+                time.sleep(DISPLAY_SLEEP)
             
             if done or t >= max_t - 1:
                 if total_reward > max_reward:
                     max_reward = total_reward
+                # Log episode results to a file
+                if episode % 10 == 0:  # Log every 10 episodes to avoid excessive logging
+                    with open(f'{logs_dir}/training_log.txt', 'a') as f:
+                        f.write(f'Episode {episode}, Steps: {t}, Reward: {total_reward:.0f}, Max Reward: {max_reward:.0f}, Epsilon: {agent.epsilon:.4f}\n')
                 break
 
 
@@ -235,9 +275,9 @@ if __name__ == "__main__":
     env = gym.make("Pyrace-v1").unwrapped  # skip the TimeLimit and OrderEnforcing default wrappers
     print('env', type(env))
     
-    # Create directories for saving models
-    if not os.path.exists(f'models_{VERSION_NAME}'):
-        os.makedirs(f'models_{VERSION_NAME}')
+    # Create directories for saving models and logs
+    os.makedirs(f'models_{VERSION_NAME}', exist_ok=True)
+    os.makedirs(f'logs_{VERSION_NAME}', exist_ok=True)
     
     # Print environment information
     print("Observation space:", env.observation_space)
@@ -267,13 +307,33 @@ if __name__ == "__main__":
         batch_size=BATCH_SIZE
     )
     
-    # Choose what to do:
+    # Run mode selection
+    print("Select run mode:")
+    print("1. Train a new model")
+    print("2. Load and continue training a saved model")
+    print("3. Play with a saved model (no learning)")
+    print("4. Demo mode (short training run with frequent display)")
     
-    # Train a new model
-    simulate(agent, env, learning=True, num_episodes=NUM_EPISODES, max_t=MAX_T)
+    mode = input("Enter mode (1-4): ")
     
-    # Alternatively, load and continue training a saved model
-    # load_and_play(3500, learning=True)
-    
-    # Or just play with a saved model without learning
-    # load_and_play(3500, learning=False) 
+    if mode == "1":
+        # Train a new model
+        simulate(agent, env, learning=True, num_episodes=NUM_EPISODES, max_t=MAX_T)
+    elif mode == "2":
+        # Load and continue training
+        episode = int(input("Enter episode number to load: "))
+        load_and_play(episode, learning=True)
+    elif mode == "3":
+        # Play with a saved model
+        episode = int(input("Enter episode number to load: "))
+        DISPLAY_MODE = True   # Force display on
+        DISPLAY_SLEEP = 0.1   # Slower for better viewing
+        load_and_play(episode, learning=False)
+    elif mode == "4":
+        # Demo mode - short training run with more frequent display
+        DEMO_MODE = True
+        DISPLAY_EPISODES = 1  # Display every episode
+        DISPLAY_SLEEP = 0.05  # Slightly faster for training
+        simulate(agent, env, learning=True, num_episodes=DEMO_EPISODES, max_t=MAX_T)
+    else:
+        print("Invalid mode selected. Exiting.") 
