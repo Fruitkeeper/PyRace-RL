@@ -1,3 +1,25 @@
+"""
+PyRace Reinforcement Learning with Deep Q-Networks (DQN)
+=======================================================
+
+This file contains our implementation of Deep Q-Learning for the PyRace environment.
+
+IMPORTANT NOTES:
+---------------
+1. For detailed explanation of our approach, improvements, and implementation details,
+   please refer to the DQN_README.md file.
+
+2. TO RUN OUR BEST MODEL: Use the run_best_model.py script instead of this file:
+   
+   python run_best_model.py
+   
+   This will load and run our best-performing model (DQN_v04b, episode 1100).
+   See BestModel_README.md for options and usage details.
+
+3. This file is primarily for training new models or continuing training from checkpoints.
+   If you just want to see the final result, use run_best_model.py as mentioned above.
+"""
+
 import sys, os
 import math, random
 import numpy as np
