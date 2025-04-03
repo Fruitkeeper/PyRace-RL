@@ -19,10 +19,10 @@ import gym_race
 This imports the enhanced race environment with continuous observation space and expanded action space
 registered as "Pyrace-v3"
 """
-VERSION_NAME = 'DQN_v04'  # the name for our improved model
+VERSION_NAME = 'DQN_v04b'  # the name for our improved model
 
 REPORT_EPISODES = 500  # report (plot) every...
-DISPLAY_EPISODES = 10   # display live game every...
+DISPLAY_EPISODES = 50   # display live game every...
 
 # Visual Settings
 DISPLAY_SLEEP = 0.1    # seconds to sleep between steps when displaying
@@ -411,18 +411,20 @@ def simulate(agent, env, learning=True, episode_start=0, num_episodes=50000, max
             total_rewards.append(total_reward)
             episode_lengths.append(episode_length)
             
-            # Report and save model periodically
+            # Create visualization and save data periodically
             if learning and episode % REPORT_EPISODES == 0:
                 # Create advanced visualization with more metrics
                 create_advanced_visualization(agent, total_rewards, episode_lengths, episode, logs_dir)
                 
-                # Save model
-                model_file = f'{models_dir}/dqn_model_{episode}.pt'
-                agent.save(model_file)
-                
                 # Save training data as numpy arrays for later analysis
                 np.save(f'{logs_dir}/rewards_{episode}.npy', np.array(total_rewards))
                 np.save(f'{logs_dir}/episode_lengths_{episode}.npy', np.array(episode_lengths))
+            
+            # Save model after EVERY episode if learning
+            if learning:
+                model_file = f'{models_dir}/dqn_model_{episode}.pt'
+                agent.save(model_file)
+                print(f"Model saved at episode {episode}")
         
         # Reset the environment
         obv, _ = env.reset()
@@ -493,6 +495,17 @@ def simulate(agent, env, learning=True, episode_start=0, num_episodes=50000, max
                 # Update max reward
                 if total_reward > max_reward:
                     max_reward = total_reward
+                    
+                # Print completion status
+                if done:
+                    if info["check"] >= len(check_point):
+                        print(f"Episode {episode} - SUCCESS! Completed all {len(check_point)} checkpoints in {t} steps!")
+                    elif info["crash"]:
+                        print(f"Episode {episode} - CRASH at checkpoint {info['check']}/{len(check_point)}")
+                    else:
+                        print(f"Episode {episode} - Done with {info['check']}/{len(check_point)} checkpoints")
+                elif t >= max_t - 1:
+                    print(f"Episode {episode} - Reached max steps ({max_t}) with {info['check']}/{len(check_point)} checkpoints")
                 
                 # Calculate average metrics
                 avg_loss = episode_loss / max(1, num_updates)
@@ -506,7 +519,7 @@ def simulate(agent, env, learning=True, episode_start=0, num_episodes=50000, max
                 # Detailed console output every 10 episodes
                 if episode % 10 == 0:
                     epsilon = agent.get_epsilon() if hasattr(agent, 'get_epsilon') else agent.epsilon
-                    print(f"Episode {episode} - Steps: {t}, Reward: {total_reward:.0f}, "
+                    print(f"Episode {episode} stats - Steps: {t}, Reward: {total_reward:.0f}, "
                           f"Max: {max_reward:.0f}, Epsilon: {epsilon:.4f}, Loss: {avg_loss:.4f}")
                 break
     
@@ -759,30 +772,123 @@ if __name__ == "__main__":
             agent1.steps_done = agent1.epsilon_decay
             agent2.steps_done = agent2.epsilon_decay
             
+            # Initialize reward tracking
+            rewards1 = []
+            rewards2 = []
+            checkpoints1 = []
+            checkpoints2 = []
+            
             # Run evaluation for each model
             print(f"\nEvaluating model from episode {ep1}...")
-            rewards1 = []
             for i in range(num_eval_episodes):
                 print(f"Evaluation episode {i+1}/{num_eval_episodes}")
-                rewards, _ = simulate(agent1, env1, learning=False, num_episodes=1, max_t=MAX_T)
-                rewards1.extend(rewards)
+                # Manually track rewards for this episode
+                env1.reset()
+                done = False
+                episode_reward = 0
+                max_steps = MAX_T
+                step_count = 0
+                last_check = 0
+                
+                while not done and step_count < max_steps:
+                    action = agent1.select_action(env1.pyrace.observe(), explore=False)
+                    _, reward, done, _, info = env1.step(action)
+                    episode_reward += reward
+                    step_count += 1
+                    last_check = info["check"]
+                    
+                    # Display
+                    env1.set_msgs([
+                        f'EVALUATE Model {ep1}',
+                        f'Episode: {i+1}/{num_eval_episodes}',
+                        f'Time steps: {step_count}',
+                        f'Check: {info["check"]}/{len(check_point)}',
+                        f'Dist: {info["dist"]:.1f}',
+                        f'Speed: {info["speed"]:.1f}',
+                        f'Crash: {info["crash"]}',
+                        f'Reward: {episode_reward:.0f}'
+                    ])
+                    env1.render()
+                    time.sleep(DISPLAY_SLEEP)
+                
+                # Record this episode's results
+                rewards1.append(episode_reward)
+                checkpoints1.append(last_check)
+                print(f"Episode finished: Reward = {episode_reward:.0f}, Checkpoints = {last_check}/{len(check_point)}")
             
             print(f"\nEvaluating model from episode {ep2}...")
-            rewards2 = []
             for i in range(num_eval_episodes):
                 print(f"Evaluation episode {i+1}/{num_eval_episodes}")
-                rewards, _ = simulate(agent2, env2, learning=False, num_episodes=1, max_t=MAX_T)
-                rewards2.extend(rewards)
+                # Manually track rewards for this episode
+                env2.reset()
+                done = False
+                episode_reward = 0
+                max_steps = MAX_T
+                step_count = 0
+                last_check = 0
+                
+                while not done and step_count < max_steps:
+                    action = agent2.select_action(env2.pyrace.observe(), explore=False)
+                    _, reward, done, _, info = env2.step(action)
+                    episode_reward += reward
+                    step_count += 1
+                    last_check = info["check"]
+                    
+                    # Display
+                    env2.set_msgs([
+                        f'EVALUATE Model {ep2}',
+                        f'Episode: {i+1}/{num_eval_episodes}',
+                        f'Time steps: {step_count}',
+                        f'Check: {info["check"]}/{len(check_point)}',
+                        f'Dist: {info["dist"]:.1f}',
+                        f'Speed: {info["speed"]:.1f}',
+                        f'Crash: {info["crash"]}',
+                        f'Reward: {episode_reward:.0f}'
+                    ])
+                    env2.render()
+                    time.sleep(DISPLAY_SLEEP)
+                
+                # Record this episode's results
+                rewards2.append(episode_reward)
+                checkpoints2.append(last_check)
+                print(f"Episode finished: Reward = {episode_reward:.0f}, Checkpoints = {last_check}/{len(check_point)}")
             
-            # Compare results
+            # Compare results - handle empty arrays gracefully
             print("\n===== Comparison Results =====")
-            print(f"Model from episode {ep1}: Avg reward = {np.mean(rewards1):.0f}, Max = {np.max(rewards1):.0f}")
-            print(f"Model from episode {ep2}: Avg reward = {np.mean(rewards2):.0f}, Max = {np.max(rewards2):.0f}")
             
-            if np.mean(rewards1) > np.mean(rewards2):
-                print(f"Model from episode {ep1} performs better by {np.mean(rewards1) - np.mean(rewards2):.0f} points")
+            # Calculate stats safely
+            avg_reward1 = np.mean(rewards1) if rewards1 else 0
+            max_reward1 = np.max(rewards1) if rewards1 else 0
+            avg_check1 = np.mean(checkpoints1) if checkpoints1 else 0
+            
+            avg_reward2 = np.mean(rewards2) if rewards2 else 0
+            max_reward2 = np.max(rewards2) if rewards2 else 0
+            avg_check2 = np.mean(checkpoints2) if checkpoints2 else 0
+            
+            print(f"Model from episode {ep1}:")
+            print(f"  - Avg reward: {avg_reward1:.0f}")
+            print(f"  - Max reward: {max_reward1:.0f}")
+            print(f"  - Avg checkpoints: {avg_check1:.1f}/{len(check_point)}")
+            print(f"  - Success rate: {sum(1 for c in checkpoints1 if c >= len(check_point))/len(checkpoints1):.0%}")
+            
+            print(f"\nModel from episode {ep2}:")
+            print(f"  - Avg reward: {avg_reward2:.0f}")
+            print(f"  - Max reward: {max_reward2:.0f}")
+            print(f"  - Avg checkpoints: {avg_check2:.1f}/{len(check_point)}")
+            print(f"  - Success rate: {sum(1 for c in checkpoints2 if c >= len(check_point))/len(checkpoints2):.0%}")
+            
+            print("\nOverall Comparison:")
+            if avg_reward1 > avg_reward2:
+                print(f"Model from episode {ep1} performs better by {avg_reward1 - avg_reward2:.0f} reward points")
             else:
-                print(f"Model from episode {ep2} performs better by {np.mean(rewards2) - np.mean(rewards1):.0f} points")
+                print(f"Model from episode {ep2} performs better by {avg_reward2 - avg_reward1:.0f} reward points")
+            
+            if avg_check1 > avg_check2:
+                print(f"Model from episode {ep1} completes more checkpoints on average")
+            elif avg_check2 > avg_check1:
+                print(f"Model from episode {ep2} completes more checkpoints on average")
+            else:
+                print(f"Both models complete the same number of checkpoints on average")
         
         else:
             print("Invalid mode selected. Exiting.")

@@ -89,11 +89,25 @@ class Car:
         self.cur_distance = dist
 
     def update(self, map=None):
-        # Natural deceleration (reduced from original)
-        self.speed -= 0.3
+        # Get the minimum radar distance to detect proximity to walls
+        min_radar = 200
+        if self.radars:
+            min_radar = min([r[1] for r in self.radars])
         
-        # Speed limits
-        if self.speed > 10: self.speed = 10
+        # Natural deceleration - lighter in general
+        base_deceleration = 0.2  # Reduced from 0.3
+        
+        # Milder deceleration in curves
+        if min_radar < 70:  # Only apply extra deceleration when very close to walls
+            # Less aggressive curve deceleration
+            curve_deceleration = base_deceleration * (1 + (70 - min_radar) / 100)
+            self.speed -= curve_deceleration
+        else:
+            # Normal deceleration on straight sections
+            self.speed -= base_deceleration
+        
+        # Speed limits - increased back to original with small buffer
+        if self.speed > 9.5: self.speed = 9.5  # Allow speeds close to max (10)
         if self.speed < 0: self.speed = 0  # Allow car to come to a complete stop
         
         # Update position based on speed and angle
@@ -186,15 +200,30 @@ class PyRace2DContinuous:
         self.cars = [self.car]
 
     def action(self, action):
-        # Expanded action space with braking
+        # Get minimum radar distance to detect proximity to walls
+        min_radar = 200
+        if self.car.radars:
+            min_radar = min([r[1] for r in self.car.radars])
+            
+        # Speed factor based on proximity to walls - less restrictive
+        # Only slightly reduce acceleration near walls
+        wall_factor = min(1.0, min_radar / 70)  # Less aggressive reduction
+        
+        # Expanded action space with less restrictive adjustments
         if action == 0:   # Accelerate
-            self.car.speed += 2
+            # Higher base acceleration with milder wall penalty
+            acceleration = 2.2 * (0.7 + 0.3 * wall_factor)  # At least 70% effective even near walls
+            self.car.speed += acceleration
         elif action == 1: # Turn left
-            self.car.angle += 5
+            # Turning is more effective at higher speeds but capped
+            turn_rate = 5 + min(3, self.car.speed / 3)  # Cap turn enhancement to avoid over-steering
+            self.car.angle += turn_rate
         elif action == 2: # Turn right
-            self.car.angle -= 5
-        elif action == 3: # Brake - new action
-            self.car.speed -= 1.5  # Strong braking effect
+            # Turning is more effective at higher speeds but capped
+            turn_rate = 5 + min(3, self.car.speed / 3)  # Cap turn enhancement to avoid over-steering
+            self.car.angle -= turn_rate
+        elif action == 3: # Brake - less powerful to encourage speed
+            self.car.speed -= 1.5  # Reduced from 2.0
 
         self.car.update()
         self.car.check_collision()
@@ -207,9 +236,11 @@ class PyRace2DContinuous:
     def evaluate(self):
         reward = 0
         
-        # Crashed - penalize but credit distance covered
+        # Crashed - still penalize crashes but less severely
         if not self.car.is_alive:
-            reward = -5000 + self.car.distance * 0.5
+            # Less aggressive crash penalty
+            speed_penalty = self.car.speed * self.car.speed * 50  # Reduced from 100
+            reward = -5000 - speed_penalty + self.car.distance * 0.8  # More credit for distance
         
         # Completed lap - big reward with time bonus
         elif self.car.goal:
@@ -230,13 +261,28 @@ class PyRace2DContinuous:
             reward = checkpoint_reward
             
         # Small positive reward for moving forward and staying alive
-        # The faster the car goes while staying on track, the more reward it gets
         else:
-            reward = self.car.speed * 0.5
+            # Calculate how close to walls the car is (using minimum radar distance)
+            min_radar_distance = min([r[1] for r in self.car.radars]) if self.car.radars else 200
             
-            # Add small penalty for very slow movement to encourage progress
+            # More generous speed reward - higher optimal speed
+            if self.car.speed <= 8:
+                # Reward speeds up to 8 linearly
+                reward = self.car.speed * 1.0  # Increased multiplier
+            else:
+                # Only apply speed penalties when very close to walls at high speed
+                speed_over_limit = self.car.speed - 8
+                
+                # Less aggressive wall-speed penalty
+                wall_factor = max(0, (60 - min_radar_distance) / 60)  # Only penalize when very close
+                speed_penalty = speed_over_limit * wall_factor * 2.0  # Reduced from 5.0
+                
+                # Base reward for speed minus the smaller penalty
+                reward = self.car.speed * 1.0 - speed_penalty
+            
+            # Smaller penalty for very slow movement
             if self.car.speed < 2:
-                reward -= 1
+                reward -= 0.5  # Reduced from 1.0
                 
         return reward
 
