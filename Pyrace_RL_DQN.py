@@ -1,7 +1,4 @@
 """
-PyRace Reinforcement Learning with Deep Q-Networks (DQN)
-=======================================================
-
 This file contains our implementation of Deep Q-Learning for the PyRace environment.
 
 IMPORTANT NOTES:
